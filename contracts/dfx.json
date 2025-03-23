@@ -1,0 +1,30 @@
+{
+  "canisters": {
+    "ip_registry": {
+      "type": "motoko",
+      "main": "src/ip_registry/main.mo"
+    },
+    "token": {
+      "type": "motoko",
+      "main": "vendors/dip20/motoko/src/token.mo",
+      "args": ""
+    },
+    "governance": {
+      "type": "motoko",
+      "main": "src/governance/main.mo"
+    }
+  },
+  "defaults": {
+    "build": {
+      "args": "",
+      "packtool": ""
+    }
+  },
+  "networks": {
+    "local": {
+      "bind": "127.0.0.1:8000",
+      "type": "ephemeral"
+    }
+  },
+  "version": 1
+} 

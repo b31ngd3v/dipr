@@ -1,0 +1,3 @@
+[submodule "contracts/vendors/dip20"]
+	path = contracts/vendors/dip20
+	url = https://github.com/Psychedelic/DIP20.git
