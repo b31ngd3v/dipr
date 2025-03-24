@@ -31,24 +31,18 @@ dfx canister call token setFeeTo "(principal \"$USER_PRINCIPAL\")"
 # Deploy other canisters
 echo "Deploying remaining canisters..."
 dfx deploy ip_registry
-dfx deploy governance
 
 # Get canister IDs
 TOKEN_ID=$(dfx canister id token)
 IP_REGISTRY_ID=$(dfx canister id ip_registry)
-GOVERNANCE_ID=$(dfx canister id governance)
 
 echo "Token ID: $TOKEN_ID"
 echo "IP Registry ID: $IP_REGISTRY_ID"
-echo "Governance ID: $GOVERNANCE_ID"
 
 # Update canister IDs for cross-canister calls
 echo "Updating canister references..."
 dfx canister call ip_registry updateTokenCanisterId "(\"$TOKEN_ID\")"
 echo "Updated IP Registry token reference"
-
-dfx canister call governance updateTokenCanisterId "(\"$TOKEN_ID\")"
-echo "Updated Governance token reference"
 
 # Approve tokens for testing
 echo "Approving tokens for testing..."
