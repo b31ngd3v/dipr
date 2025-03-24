@@ -66,6 +66,7 @@ actor IpRegistry {
     disputes: [DisputeID];
     created: Int;
     updated: Int;
+    ownership_history: [(Principal, Int)]; // Track ownership history with timestamps
   };
   
   public type IpRecordPublic = {
@@ -89,6 +90,7 @@ actor IpRegistry {
     #DisputeVote: (DisputeID, Principal, Bool);
     #DisputeResolved: (DisputeID, Bool);
     #LicenseIssued: (IpID, Principal);
+    #OwnershipTransferred: (IpID, Principal, Principal);
   };
   
   public type Event = {
@@ -195,6 +197,7 @@ actor IpRegistry {
       disputes = record.disputes;
       created = record.created;
       updated = Time.now();
+      ownership_history = record.ownership_history;
     }
   };
   
@@ -233,9 +236,49 @@ actor IpRegistry {
     fileChunksEntries := [];
   };
   
+  // Add ownership verification helper
+  private func verifyOwnership(ipId: IpID, caller: Principal) : Bool {
+    switch (assets.get(ipId)) {
+      case (null) { false };
+      case (?record) { record.owner == caller };
+    }
+  };
+
+  // Add ownership transfer function
+  public shared(msg) func transferOwnership(ipId: IpID, newOwner: Principal) : async Result.Result<(), Text> {
+    switch (assets.get(ipId)) {
+      case (null) { #err("IP record not found") };
+      case (?record) {
+        if (record.owner != msg.caller) {
+          #err("Only the current owner can transfer ownership")
+        } else {
+          let updatedRecord = {
+            owner = newOwner;
+            title = record.title;
+            description = record.description;
+            file_hash = record.file_hash;
+            status = record.status;
+            stakes = record.stakes;
+            stakes_entries = record.stakes_entries;
+            licenses = record.licenses;
+            disputes = record.disputes;
+            created = record.created;
+            updated = Time.now();
+            ownership_history = Array.append(record.ownership_history, [(msg.caller, Time.now())]);
+          };
+          assets.put(ipId, updatedRecord);
+          addEvent(#OwnershipTransferred(ipId, msg.caller, newOwner));
+          #ok()
+        }
+      }
+    }
+  };
+  
   // Core Methods
   public shared(msg) func createIpRecord(title: Text, description: Text, fileHash: Text) : async IpID {
     let owner = msg.caller;
+    let id = nextIpId;
+    nextIpId += 1;
     
     let newIpRecord : IpRecord = {
       owner = owner;
@@ -249,15 +292,12 @@ actor IpRegistry {
       disputes = [];
       created = Time.now();
       updated = Time.now();
+      ownership_history = [(owner, Time.now())];
     };
     
-    let ipId = nextIpId;
-    nextIpId += 1;
-    
-    assets.put(ipId, newIpRecord);
-    addEvent(#IpCreated(ipId));
-    
-    return ipId;
+    assets.put(id, newIpRecord);
+    addEvent(#IpCreated(id));
+    id
   };
   
   public shared(msg) func uploadChunk(ipId: IpID, index: Nat, chunk: Blob) : async Result.Result<(), Text> {
@@ -314,6 +354,7 @@ actor IpRegistry {
           disputes = rec.disputes;
           created = rec.created;
           updated = Time.now();
+          ownership_history = rec.ownership_history;
         };
         
         assets.put(ipId, updatedRecord);
@@ -323,57 +364,19 @@ actor IpRegistry {
   };
   
   public shared(msg) func stake(ipId: IpID, amount: Nat) : async Result.Result<(), Text> {
-    let record = getRecord(ipId);
-    
-    switch (record) {
-      case (null) {
-        return #err("IP record not found");
-      };
-      case (?rec) {
-        // Call token contract to transfer tokens
-        let transferResult = await getTokenCanister().transferFrom(msg.caller, selfPrincipal, amount);
-        
-        switch (transferResult) {
-          case (#Ok(_)) {
-            // Update stake amount
-            let stakesMap = stakesEntriesToMap(rec.stakes_entries);
-            let currentStake = switch (stakesMap.get(msg.caller)) {
-              case (null) { 0 };
-              case (?val) { val };
-            };
-            
-            stakesMap.put(msg.caller, currentStake + amount);
-            
-            let updatedRecord = {
-              owner = rec.owner;
-              title = rec.title;
-              description = rec.description;
-              file_hash = rec.file_hash;
-              status = rec.status;
-              stakes = rec.stakes + amount;
-              stakes_entries = stakesMapToEntries(stakesMap);
-              licenses = rec.licenses;
-              disputes = rec.disputes;
-              created = rec.created;
-              updated = Time.now();
-            };
-            
-            assets.put(ipId, updatedRecord);
-            addEvent(#IpStaked(ipId, msg.caller, amount));
-            return #ok();
-          };
-          case (#Err(e)) {
-            var errorMsg = "Token transfer failed: ";
-            switch (e) {
-              case (#InsufficientAllowance) { errorMsg := errorMsg # "Insufficient allowance" };
-              case (#InsufficientBalance) { errorMsg := errorMsg # "Insufficient balance" };
-              case (_) { errorMsg := errorMsg # "Unknown error" };
-            };
-            return #err(errorMsg);
-          };
-        };
-      };
+    if (not verifyOwnership(ipId, msg.caller)) {
+      return #err("Only the IP owner can stake");
     };
+    
+    switch (assets.get(ipId)) {
+      case (null) { #err("IP record not found") };
+      case (?record) {
+        let updatedRecord = updateStake(record, msg.caller, amount);
+        assets.put(ipId, updatedRecord);
+        addEvent(#IpStaked(ipId, msg.caller, amount));
+        #ok()
+      }
+    }
   };
   
   public shared(msg) func raiseDispute(ipId: IpID, reason: Text, stake: Nat) : async Result.Result<DisputeID, Text> {
@@ -427,6 +430,7 @@ actor IpRegistry {
               disputes = updatedDisputes;
               created = rec.created;
               updated = Time.now();
+              ownership_history = rec.ownership_history;
             };
             
             assets.put(ipId, updatedRecord);
@@ -552,6 +556,7 @@ actor IpRegistry {
               disputes = rec.disputes;
               created = rec.created;
               updated = Time.now();
+              ownership_history = rec.ownership_history;
             };
             
             assets.put(disp.ipId, updatedRecord);
@@ -565,24 +570,13 @@ actor IpRegistry {
   };
   
   public shared(msg) func issueLicense(ipId: IpID, licensee: Principal, terms: Text, royalty: Nat) : async Result.Result<Nat, Text> {
-    let record = getRecord(ipId);
+    if (not verifyOwnership(ipId, msg.caller)) {
+      return #err("Only the IP owner can issue licenses");
+    };
     
-    switch (record) {
-      case (null) {
-        return #err("IP record not found");
-      };
-      case (?rec) {
-        if (rec.owner != msg.caller) {
-          return #err("Only the owner can issue licenses");
-        };
-        
-        switch (rec.status) {
-          case (#Verified) {};
-          case (_) {
-            return #err("Can only license verified IP");
-          };
-        };
-        
+    switch (assets.get(ipId)) {
+      case (null) { #err("IP record not found") };
+      case (?record) {
         let licenseId = nextLicenseId;
         nextLicenseId += 1;
         
@@ -595,28 +589,27 @@ actor IpRegistry {
           createdAt = Time.now();
         };
         
-        let updatedLicenses = Array.append(rec.licenses, [newLicense]);
-        
+        let updatedLicenses = Array.append(record.licenses, [newLicense]);
         let updatedRecord = {
-          owner = rec.owner;
-          title = rec.title;
-          description = rec.description;
-          file_hash = rec.file_hash;
-          status = rec.status;
-          stakes = rec.stakes;
-          stakes_entries = rec.stakes_entries;
+          owner = record.owner;
+          title = record.title;
+          description = record.description;
+          file_hash = record.file_hash;
+          status = record.status;
+          stakes = record.stakes;
+          stakes_entries = record.stakes_entries;
           licenses = updatedLicenses;
-          disputes = rec.disputes;
-          created = rec.created;
+          disputes = record.disputes;
+          created = record.created;
           updated = Time.now();
+          ownership_history = record.ownership_history;
         };
         
         assets.put(ipId, updatedRecord);
         addEvent(#LicenseIssued(ipId, licensee));
-        
-        return #ok(licenseId);
-      };
-    };
+        #ok(licenseId)
+      }
+    }
   };
   
   public query func getIp(ipId: IpID) : async ?IpRecordPublic {
