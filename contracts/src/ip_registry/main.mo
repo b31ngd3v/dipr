@@ -54,6 +54,13 @@ actor IpRegistry {
     amount: Nat;
   };
   
+  // Add file metadata to store MIME type and original filename
+  public type FileMetadata = {
+    filename: Text;
+    mimeType: Text;
+    fileSize: Nat;
+  };
+  
   public type IpRecord = {
     owner: Principal;
     title: Text;
@@ -67,6 +74,7 @@ actor IpRegistry {
     created: Int;
     updated: Int;
     ownership_history: [(Principal, Int)]; // Track ownership history with timestamps
+    file_metadata: ?FileMetadata; // Optional file metadata
   };
   
   public type IpRecordPublic = {
@@ -81,6 +89,7 @@ actor IpRegistry {
     disputes: [DisputeID];
     created: Int;
     updated: Int;
+    file_metadata: ?FileMetadata; // Include file metadata in public record
   };
   
   public type EventKind = {
@@ -156,6 +165,7 @@ actor IpRegistry {
       disputes = record.disputes;
       created = record.created;
       updated = record.updated;
+      file_metadata = record.file_metadata;
     }
   };
   
@@ -198,6 +208,7 @@ actor IpRegistry {
       created = record.created;
       updated = Time.now();
       ownership_history = record.ownership_history;
+      file_metadata = record.file_metadata;
     }
   };
   
@@ -265,6 +276,7 @@ actor IpRegistry {
             created = record.created;
             updated = Time.now();
             ownership_history = Array.append(record.ownership_history, [(msg.caller, Time.now())]);
+            file_metadata = record.file_metadata;
           };
           assets.put(ipId, updatedRecord);
           addEvent(#OwnershipTransferred(ipId, msg.caller, newOwner));
@@ -293,6 +305,7 @@ actor IpRegistry {
       created = Time.now();
       updated = Time.now();
       ownership_history = [(owner, Time.now())];
+      file_metadata = null; // Initialize with no file metadata
     };
     
     assets.put(id, newIpRecord);
@@ -355,6 +368,7 @@ actor IpRegistry {
           created = rec.created;
           updated = Time.now();
           ownership_history = rec.ownership_history;
+          file_metadata = rec.file_metadata;
         };
         
         assets.put(ipId, updatedRecord);
@@ -431,6 +445,7 @@ actor IpRegistry {
               created = rec.created;
               updated = Time.now();
               ownership_history = rec.ownership_history;
+              file_metadata = rec.file_metadata;
             };
             
             assets.put(ipId, updatedRecord);
@@ -557,6 +572,7 @@ actor IpRegistry {
               created = rec.created;
               updated = Time.now();
               ownership_history = rec.ownership_history;
+              file_metadata = rec.file_metadata;
             };
             
             assets.put(disp.ipId, updatedRecord);
@@ -603,6 +619,7 @@ actor IpRegistry {
           created = record.created;
           updated = Time.now();
           ownership_history = record.ownership_history;
+          file_metadata = record.file_metadata;
         };
         
         assets.put(ipId, updatedRecord);
@@ -633,5 +650,213 @@ actor IpRegistry {
   
   public query func getEvents() : async [Event] {
     return Buffer.toArray(events);
+  };
+  
+  // Add function to update file metadata
+  public shared(msg) func updateFileMetadata(ipId: IpID, filename: Text, mimeType: Text, fileSize: Nat) : async Result.Result<(), Text> {
+    let record = getRecord(ipId);
+    
+    switch (record) {
+      case (null) {
+        return #err("IP record not found");
+      };
+      case (?rec) {
+        if (rec.owner != msg.caller) {
+          return #err("Only the owner can update file metadata");
+        };
+        
+        let metadata : FileMetadata = {
+          filename = filename;
+          mimeType = mimeType;
+          fileSize = fileSize;
+        };
+        
+        let updatedRecord = {
+          owner = rec.owner;
+          title = rec.title;
+          description = rec.description;
+          file_hash = rec.file_hash;
+          status = rec.status;
+          stakes = rec.stakes;
+          stakes_entries = rec.stakes_entries;
+          licenses = rec.licenses;
+          disputes = rec.disputes;
+          created = rec.created;
+          updated = Time.now();
+          ownership_history = rec.ownership_history;
+          file_metadata = ?metadata;
+        };
+        
+        assets.put(ipId, updatedRecord);
+        return #ok();
+      };
+    };
+  };
+  
+  // Update the getFileInfo function to use the new metadata field
+  public query func getFileInfo(ipId: IpID): async Result.Result<{chunkCount: Nat; fileSize: Nat; mimeType: Text; filename: Text}, Text> {
+    let record = getRecord(ipId);
+    
+    switch (record) {
+      case (null) {
+        return #err("IP record not found");
+      };
+      case (?rec) {
+        switch (ipFileChunks.get(ipId)) {
+          case (null) {
+            return #err("No file data found for this IP record");
+          };
+          case (?chunkMap) {
+            // Get the total number of chunks
+            let chunkCount = Iter.size(chunkMap.entries());
+            
+            // Use file metadata if available
+            switch (rec.file_metadata) {
+              case (?metadata) {
+                return #ok({
+                  chunkCount = chunkCount;
+                  fileSize = metadata.fileSize;
+                  mimeType = metadata.mimeType;
+                  filename = metadata.filename;
+                });
+              };
+              
+              // Fall back to the old method if metadata is not available
+              case (null) {
+                // Simple logic to guess MIME type from the title or description
+                var mimeType = "application/octet-stream"; // Default MIME type
+                var filename = rec.title; // Default filename without extension
+                
+                let titleLower = Text.toLowercase(rec.title);
+                if (Text.contains(titleLower, #text ".pdf")) {
+                  mimeType := "application/pdf";
+                  filename := rec.title;
+                } else if (Text.contains(titleLower, #text ".png") or Text.contains(titleLower, #text "image")) {
+                  mimeType := "image/png";
+                  if (not Text.contains(titleLower, #text ".png")) {
+                    filename := rec.title # ".png";
+                  };
+                } else if (Text.contains(titleLower, #text ".jpg") or Text.contains(titleLower, #text "jpeg")) {
+                  mimeType := "image/jpeg";
+                  if (not Text.contains(titleLower, #text ".jpg") and not Text.contains(titleLower, #text ".jpeg")) {
+                    filename := rec.title # ".jpg";
+                  };
+                } else if (Text.contains(titleLower, #text ".txt") or Text.contains(titleLower, #text "text")) {
+                  mimeType := "text/plain";
+                  if (not Text.contains(titleLower, #text ".txt")) {
+                    filename := rec.title # ".txt";
+                  };
+                } else if (Text.contains(titleLower, #text ".html") or Text.contains(titleLower, #text "html")) {
+                  mimeType := "text/html";
+                  if (not Text.contains(titleLower, #text ".html")) {
+                    filename := rec.title # ".html";
+                  };
+                } else if (Text.contains(titleLower, #text ".json")) {
+                  mimeType := "application/json";
+                  if (not Text.contains(titleLower, #text ".json")) {
+                    filename := rec.title # ".json";
+                  };
+                } else if (Text.contains(titleLower, #text ".mp3") or Text.contains(titleLower, #text "audio")) {
+                  mimeType := "audio/mpeg";
+                  if (not Text.contains(titleLower, #text ".mp3")) {
+                    filename := rec.title # ".mp3";
+                  };
+                } else if (Text.contains(titleLower, #text ".mp4") or Text.contains(titleLower, #text "video")) {
+                  mimeType := "video/mp4";
+                  if (not Text.contains(titleLower, #text ".mp4")) {
+                    filename := rec.title # ".mp4";
+                  };
+                } else {
+                  // Don't add .bin extension - keep original filename
+                  filename := rec.title;
+                };
+                
+                return #ok({
+                  chunkCount = chunkCount;
+                  fileSize = chunkCount * 500 * 1024; // Approximate, 500KB per chunk
+                  mimeType = mimeType;
+                  filename = filename;
+                });
+              };
+            };
+          };
+        };
+      };
+    };
+  };
+  
+  public query func getFileChunk(ipId: IpID, index: Nat): async Result.Result<Blob, Text> {
+    let record = getRecord(ipId);
+    
+    switch (record) {
+      case (null) {
+        return #err("IP record not found");
+      };
+      case (?rec) {
+        switch (ipFileChunks.get(ipId)) {
+          case (null) {
+            return #err("No file data found for this IP record");
+          };
+          case (?chunkMap) {
+            switch (chunkMap.get(index)) {
+              case (null) {
+                return #err("Chunk not found");
+              };
+              case (?chunk) {
+                return #ok(chunk);
+              };
+            };
+          };
+        };
+      };
+    };
+  };
+  
+  // Get all IPs by hash, with verified ones on top
+  public query func getIpsByHash(hash: Text) : async [IpRecordPublic] {
+    // Create a buffer to store matching IPs
+    let matchingIps = Buffer.Buffer<(IpID, IpRecordPublic)>(0);
+    
+    // Find all IPs with the matching hash
+    for ((id, record) in assets.entries()) {
+      if (Text.equal(record.file_hash, hash)) {
+        let publicRecord : IpRecordPublic = {
+          id = id;
+          owner = record.owner;
+          title = record.title;
+          description = record.description;
+          file_hash = record.file_hash;
+          status = record.status;
+          stakes = record.stakes;
+          licenses = record.licenses;
+          disputes = record.disputes;
+          created = record.created;
+          updated = record.updated;
+          file_metadata = record.file_metadata;
+        };
+        matchingIps.add((id, publicRecord));
+      }
+    };
+    
+    // Sort with verified on top, then by timestamp (newest first)
+    let sortedIps = Buffer.toArray(matchingIps);
+    let sorted = Array.sort<(IpID, IpRecordPublic)>(sortedIps, func((_, a), (_, b)) {
+      // First, compare verification status
+      switch (a.status, b.status) {
+        case (#Verified, #Verified) { 
+          // Both verified, sort by creation date descending
+          if (a.created > b.created) #less else #greater 
+        };
+        case (#Verified, _) { #less }; // a is verified, b is not
+        case (_, #Verified) { #greater };  // b is verified, a is not
+        case (_, _) {
+          // Neither are verified, sort by creation date descending
+          if (a.created > b.created) #less else #greater
+        };
+      }
+    });
+    
+    // Extract just the records from the sorted array
+    Array.map<(IpID, IpRecordPublic), IpRecordPublic>(sorted, func((_, record)) { record })
   };
 } 

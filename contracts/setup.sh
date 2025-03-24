@@ -28,16 +28,22 @@ dfx canister install token --argument='("data:image/png;base64,PLACE_YOUR_BASE64
 echo "Setting fee recipient..."
 dfx canister call token setFeeTo "(principal \"$USER_PRINCIPAL\")"
 
-# Deploy other canisters
-echo "Deploying remaining canisters..."
+# Deploy ip_registry
+echo "Deploying ip_registry..."
 dfx deploy ip_registry
+
+# Deploy internet_identity
+echo "Deploying internet_identity..."
+dfx deploy internet_identity
 
 # Get canister IDs
 TOKEN_ID=$(dfx canister id token)
 IP_REGISTRY_ID=$(dfx canister id ip_registry)
+II_CANISTER_ID=$(dfx canister id internet_identity)
 
 echo "Token ID: $TOKEN_ID"
 echo "IP Registry ID: $IP_REGISTRY_ID"
+echo "Internet Identity ID: $II_CANISTER_ID"
 
 # Update canister IDs for cross-canister calls
 echo "Updating canister references..."

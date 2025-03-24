@@ -1,3 +1,7 @@
 [submodule "contracts/vendors/dip20"]
 	path = contracts/vendors/dip20
 	url = https://github.com/Psychedelic/DIP20.git
+
+[submodule "frontend"]
+	path = frontend
+	url = https://github.com/Aashi-ghub/Dapp-IP-Registry.git
